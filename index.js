@@ -69,10 +69,14 @@ MongoClient.connect(url, function(err, client){
     order_detail_collection = db.collection("order_detail");
     console.log("Database connected successfully");
 
-    app.listen(port, function(){
-        console.log(`Server started on port ${port}`);
-    });
+    if (!process.env.VERCEL) {
+        app.listen(port, function(){
+            console.log(`Server started on port ${port}`);
+        });
+    }
 });
+
+module.exports = app;
 
 
 app.get("/",function(req,res){
