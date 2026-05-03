@@ -1,0 +1,30 @@
+<main>
+
+    <div class="container mt-5">
+        <div class="row">
+            <div class="col-md-12 text-center">
+                    <h1>UPDATE CATEGORY</h1>
+            </div>
+        </div>
+        <div class="row mt-5">
+           
+            <div class="col-md-6">
+                <form method="post" action="/update_cat">
+                    <div class="form-group">
+                        <label for="exampleInputEmail1">CATEGORY ID</label>
+                        <input type="text" class="form-control" name="txtcatid" value="<%= catitems[0].category_id %>"  readonly>
+                        
+                      </div>
+                   <div class="form-group">
+                      <label for="exampleInputEmail1">CATEGORY</label>
+                      <input type="text" class="form-control" name="txtcat"   value="<%= catitems[0].category %>"  >
+                      
+                    </div>
+                    
+
+                    <button type="submit" class="btn btn-primary">UPDATE</button>
+                  </form>
+            </div>
+        </div>
+    </div>
+</main>

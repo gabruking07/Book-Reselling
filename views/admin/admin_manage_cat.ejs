@@ -1,0 +1,46 @@
+<main>
+
+    <div class="container mt-5">
+        <div class="row">
+            <div class="col-md-12 text-center">
+                    <h1>MANAGE CATEGORY</h1>
+            </div>
+        </div>
+        <div class="row mt-5">
+            <div class="col-md-6">
+                <% if(catitems.length){%>
+                        <table class="table table-bordered">
+                            <tr>
+                                <th>CATEGORY ID</th>
+                                <th>CATEGORY</th>
+                                <th>EDIT</th>
+                                <th>DELETE</th>
+                            </tr>
+                        <% for(i=0;i<catitems.length;i++){ %>
+                                <tr>
+                                    <td><%= catitems[i].category_id %></td>
+                                    <td><%= catitems[i].category %></td>
+                                    <td><a href="/edit_category/<%= catitems[i].category_id %>">EDIT</a></td>
+                                    <td><a href="/delete_category/<%= catitems[i].category_id %>">DELETE</a></td>
+                                </tr>
+                        <% } %>
+                        </table>
+                <% }else{ %>
+                        <h2>No Record Found</h2>
+                <% } %>
+            </div>
+            <div class="col-md-6">
+                <form method="post" action="/add_cat">
+                   <div class="form-group">
+                      <label for="exampleInputEmail1">CATEGORY</label>
+                      <input type="text" class="form-control" name="txtcat"  placeholder="Enter Category">
+                      
+                    </div>
+                    
+
+                    <button type="submit" class="btn btn-primary">SAVE</button>
+                  </form>
+            </div>
+        </div>
+    </div>
+</main>
