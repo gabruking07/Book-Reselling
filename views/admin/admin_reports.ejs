@@ -1,0 +1,151 @@
+<div class="container mt-5">
+    <div class="row">
+        <div class="col-md-4 mb-3">
+            <div class="card text-white bg-primary">
+                <div class="card-body text-center">
+                    <h5 class="card-title">Categories</h5>
+                    <h2><%= totalCategories %></h2>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4 mb-3">
+            <div class="card text-white bg-success">
+                <div class="card-body text-center">
+                    <h5 class="card-title">Books</h5>
+                    <h2><%= totalBooks %></h2>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4 mb-3">
+            <div class="card text-white bg-info">
+                <div class="card-body text-center">
+                    <h5 class="card-title">Customers</h5>
+                    <h2><%= totalCustomers %></h2>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4 mb-3">
+            <div class="card text-white bg-dark">
+                <div class="card-body text-center">
+                    <h5 class="card-title">Orders</h5>
+                    <h2><%= totalOrders %></h2>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row mt-4">
+        <div class="col-md-12">
+            <h3 class="mb-3">Book Report</h3>
+            <div class="table-responsive">
+                <table class="table table-bordered table-striped">
+                    <thead class="thead-dark">
+                        <tr>
+                            <th>Book ID</th>
+                            <th>Book Name</th>
+                            <th>Category</th>
+                            <th>Price</th>
+                            <th>Image</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <% if(reportBooks.length === 0) { %>
+                            <tr>
+                                <td colspan="5" class="text-center">No books found.</td>
+                            </tr>
+                        <% } %>
+                        <% reportBooks.forEach(function(item){ %>
+                            <tr>
+                                <td><%= item.book_id %></td>
+                                <td><%= item.book_name %></td>
+                                <td><%= item.category_name %></td>
+                                <td><%= item.book_price %></td>
+                                <td>
+                                    <% if(item.book_img){ %>
+                                        <img src="<%= item.book_img %>" alt="<%= item.book_name %>" style="width: 80px; height: 100px; object-fit: cover;">
+                                    <% } else { %>
+                                        No Image
+                                    <% } %>
+                                </td>
+                            </tr>
+                        <% }) %>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="row mt-4">
+        <div class="col-md-12">
+            <h3 class="mb-3">Customer Report</h3>
+            <div class="table-responsive">
+                <table class="table table-bordered table-striped">
+                    <thead class="thead-dark">
+                        <tr>
+                            <th>Customer ID</th>
+                            <th>Name</th>
+                            <th>Email</th>
+                            <th>City</th>
+                            <th>Mobile</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <% if(reportCustomers.length === 0) { %>
+                            <tr>
+                                <td colspan="5" class="text-center">No customers found.</td>
+                            </tr>
+                        <% } %>
+                        <% reportCustomers.forEach(function(item){ %>
+                            <tr>
+                                <td><%= item.customer_id %></td>
+                                <td><%= item.customer_name %></td>
+                                <td><%= item.email_id %></td>
+                                <td><%= item.city %></td>
+                                <td><%= item.mobile_no %></td>
+                            </tr>
+                        <% }) %>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="row mt-4 mb-5">
+        <div class="col-md-12">
+            <h3 class="mb-3">Order Report</h3>
+            <div class="table-responsive">
+                <table class="table table-bordered table-striped">
+                    <thead class="thead-dark">
+                        <tr>
+                            <th>Order ID</th>
+                            <th>Customer</th>
+                            <th>Book</th>
+                            <th>Qty</th>
+                            <th>Total</th>
+                            <th>Date</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <% if(reportOrders.length === 0) { %>
+                            <tr>
+                                <td colspan="7" class="text-center">No orders found.</td>
+                            </tr>
+                        <% } %>
+                        <% reportOrders.forEach(function(item){ %>
+                            <tr>
+                                <td><%= item.order_id %></td>
+                                <td><%= item.customer_name %></td>
+                                <td><%= item.book_name %></td>
+                                <td><%= item.quantity %></td>
+                                <td>Rs. <%= item.total_amount %></td>
+                                <td><%= item.order_date %></td>
+                                <td><%= item.status %></td>
+                            </tr>
+                        <% }) %>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>

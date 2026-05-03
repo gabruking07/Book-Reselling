@@ -1,0 +1,31 @@
+<div class="container mt-5 mb-5">
+    <div class="card shadow-sm">
+        <div class="card-body">
+            <div class="d-flex justify-content-between align-items-center">
+                <h2>BOOK BILL</h2>
+                <button class="btn btn-secondary" onclick="window.print()">Print Bill</button>
+            </div>
+            <hr>
+            <h5>Order Information</h5>
+            <p><strong>Order ID:</strong> <%= orderitem.order_id %></p>
+            <p><strong>Order Date:</strong> <%= orderitem.order_date %></p>
+            <p><strong>Status:</strong> <%= orderitem.status %></p>
+
+            <h5 class="mt-4">Customer Information</h5>
+            <p><strong>Name:</strong> <%= orderitem.customer_name %></p>
+            <p><strong>Email:</strong> <%= orderitem.email_id %></p>
+            <p><strong>Mobile:</strong> <%= orderitem.mobile_no %></p>
+            <p><strong>Address:</strong> <%= orderitem.address %>, <%= orderitem.city %></p>
+
+            <h5 class="mt-4">Book Information</h5>
+            <p><strong>Book:</strong> <%= orderitem.book_name %></p>
+            <p><strong>Category:</strong> <%= orderitem.category_name %></p>
+            <p><strong>Price:</strong> Rs. <%= orderitem.book_price %></p>
+            <p><strong>Quantity:</strong> <%= orderitem.quantity %></p>
+
+            <div class="alert alert-success mt-4">
+                <h4 class="mb-0">Grand Total: Rs. <%= orderitem.total_amount %></h4>
+            </div>
+        </div>
+    </div>
+</div>
