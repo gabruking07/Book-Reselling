@@ -1,0 +1,62 @@
+<main>
+  
+    <div class="container mt-5">
+        <div class="row">
+            <div class="col-md-12 text-center">
+                    <h1>UPDATE BOOK DETAIL</h1>
+            </div>
+        </div>
+        <div class="row mt-5">
+            
+            <div class="col-md-6">
+                <form method="post" action="/update_book" enctype="multipart/form-data">
+                    <div class="form-group">
+                        <label for="exampleInputEmail1">Book ID</label>
+                        <input type="text" class="form-control" name="txtbid"  value="<%= bookitems[0].book_id %>" readonly>
+                        
+                      </div>
+                   <div class="form-group">
+                      <label for="exampleInputEmail1">Book Name</label>
+                      <input type="text" class="form-control" name="txtname"  placeholder="Enter Book Name" value="<%= bookitems[0].book_name %>" >
+                      
+                    </div>
+                   
+                      <div class="form-group">
+                        <label for="exampleInputEmail1">Description</label>
+                        <textarea class="form-control" name="txtdesc"  placeholder="Enter Book Description" ><%= bookitems[0].description %></textarea>
+                        
+                      </div>
+
+                   
+            </div>
+
+            <div class="col-md-6">
+                <div class="form-group">
+                    <label for="exampleInputEmail1">Select Category</label>
+                    <select class="form-control" name="selcat">
+                        <option value="0">--Select Category--</option>
+                        <% for(i=0;i<catitems.length;i++){ %>
+                                <option value="<%= catitems[i].category_id %>" <% if(catitems[i].category_id==bookitems[0].category_id){ %> selected='selected' <% } %> ><%= catitems[i].category %></option>
+                        <% } %>
+                    </select>
+                    
+                  </div>
+                   <div class="form-group">
+                      <label for="exampleInputEmail1">Book Price</label>
+                      <input type="text" class="form-control" name="txtprice"  placeholder="Enter Book Price" value="<%= bookitems[0].book_price %>">
+                      
+                    </div>
+                    <div class="form-group">
+                        <label for="exampleInputEmail1">Book Image</label>
+                        <input type="file" class="form-control" name="txtimg">
+                        
+                        <img src="<%= bookitems[0].book_img %>" style="width:150px; height:150px;">
+                      </div>
+
+                    <button type="submit" class="btn btn-primary">UPDATE</button>
+                  </form>
+            </div>
+            
+        </div>
+    </div>
+</main>

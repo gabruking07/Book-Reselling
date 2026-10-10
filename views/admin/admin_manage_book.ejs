@@ -1,0 +1,90 @@
+<main>
+  
+    <div class="container mt-5">
+        <div class="row">
+            <div class="col-md-12 text-center">
+                    <h1>MANAGE BOOK DETAIL</h1>
+            </div>
+        </div>
+        <div class="row mt-5">
+            
+            <div class="col-md-6">
+                <form method="post" action="/add_book" enctype="multipart/form-data">
+                   <div class="form-group">
+                      <label for="exampleInputEmail1">Book Name</label>
+                      <input type="text" class="form-control" name="txtname"  placeholder="Enter Book Name" >
+                      
+                    </div>
+                    <div class="form-group">
+                        <label for="exampleInputEmail1">Select Category</label>
+                        <select class="form-control" name="selcat">
+                            <option value="0">--Select Category--</option>
+                            <% for(i=0;i<catitems.length;i++){ %>
+                                    <option value="<%= catitems[i].category_id %>"><%= catitems[i].category %></option>
+                            <% } %>
+                        </select>
+                        
+                      </div>
+                      <div class="form-group">
+                        <label for="exampleInputEmail1">Description</label>
+                        <textarea class="form-control" name="txtdesc"  placeholder="Enter Book Description" ></textarea>
+                        
+                      </div>
+
+                   
+            </div>
+
+            <div class="col-md-6">
+                
+                   <div class="form-group">
+                      <label for="exampleInputEmail1">Book Price</label>
+                      <input type="text" class="form-control" name="txtprice"  placeholder="Enter Book Price">
+                      
+                    </div>
+                    <div class="form-group">
+                        <label for="exampleInputEmail1">Book Image</label>
+                        <input type="file" class="form-control" name="txtimg">
+                        
+                      </div>
+
+                    <button type="submit" class="btn btn-primary">SAVE</button>
+                  </form>
+            </div>
+            <div class="col-md-12">
+                <% if(bookitems.length){%>
+                        <table class="table table-bordered">
+                            <tr>
+                                <th>BOOK ID</th>
+                                <th>BOOK NAME</th>
+                                <th>CATEGORY</th>
+                                <th>DESCRIPTION</th>
+                                <th>PRICE</th>
+                                <th>BOOK IMAGE</th>
+                                <th>EDIT</th>
+                                <th>DELETE</th>
+                            </tr>
+                        <% for(i=0;i<bookitems.length;i++){ %>
+                                <tr>
+                                    <td><%= bookitems[i].book_id %></td>
+                                    <td><%= bookitems[i].book_name %></td>
+                                    <% for(j=0;j<catitems.length;j++){ %>
+                                            <% if(catitems[j].category_id == bookitems[i].category_id){ %>
+                                                <td><%= catitems[j].category %></td>
+                                            <% } %>
+                                    <% } %>
+                                    
+                                    <td><%= bookitems[i].description %></td>
+                                    <td><%= bookitems[i].book_price %></td>
+                                    <td><img src="<%= bookitems[i].book_img %>" style="width:150px;height:150px;" ></td>
+                                    <td><a href="/edit_book/<%= bookitems[i].book_id %>">EDIT</a></td>
+                                    <td><a href="/delete_book/<%= bookitems[i].book_id %>">DELETE</a></td>
+                                </tr>
+                        <% } %>
+                        </table>
+                <% }else{ %>
+                        <h2>No Record Found</h2>
+                <% } %>
+            </div>
+        </div>
+    </div>
+</main>
