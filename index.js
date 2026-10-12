@@ -22,6 +22,18 @@ function httpError(status, message) {
   return error;
 }
 
+function safeErrorDetail(error) {
+  let detail = String(error?.message || error?.name || 'Unexpected error');
+  for (const key of ['MONGODB_URI', 'SESSION_SECRET', 'ADMIN_PASSWORD']) {
+    const value = process.env[key];
+    if (value) detail = detail.split(value).join('[redacted]');
+  }
+  return detail
+    .replace(/mongodb(?:\+srv)?:\/\/\S+/gi, '[MongoDB URI redacted]')
+    .replace(/(password|token|secret)\s*[:=]\s*[^\s,;]+/gi, '$1=[redacted]')
+    .slice(0, 300);
+}
+
 function parsePositiveId(value) {
   if (!/^\d+$/.test(String(value || ''))) return null;
   const number = Number(value);
@@ -397,7 +409,7 @@ function createApp({ collections, sessionStore, sessionSecret, secureCookies, tr
   app.use((err, req, res, next) => {
     if (res.headersSent) return next(err);
     const status = Number.isInteger(err.status) ? err.status : 500;
-    if (status >= 500) console.error('Request failed:', err.name || 'Error');
+    if (status >= 500) console.error('Request failed:', safeErrorDetail(err));
     if (req.accepts('html')) {
       req.session.flashMessage = status >= 500 ? 'Something went wrong. Please try again.' : err.message;
       let returnPath = '/';
@@ -457,7 +469,7 @@ async function initialize() {
 if (require.main === module) {
   const port = Number(process.env.PORT) || 3000;
   initialize().then(serverApp => serverApp.listen(port, () => console.log(`Server started on port ${port}`))).catch(error => {
-    console.error('Application startup failed:', error.name || 'Error');
+    console.error('Application startup failed:', safeErrorDetail(error));
     process.exitCode = 1;
   });
 }
@@ -467,7 +479,7 @@ async function vercelHandler(req, res) {
     const serverApp = await initialize();
     return serverApp(req, res);
   } catch (error) {
-    console.error('Application startup failed:', error.name || 'Error');
+    console.error('Application startup failed:', safeErrorDetail(error));
     if (!res.headersSent) res.status(503).send('Service temporarily unavailable.');
   }
 }
@@ -477,4 +489,5 @@ module.exports.createApp = createApp;
 module.exports.parsePositiveId = parsePositiveId;
 module.exports.parsePrice = parsePrice;
 module.exports.getImageInfo = getImageInfo;
+module.exports.safeErrorDetail = safeErrorDetail;
 module.exports.initialize = initialize;

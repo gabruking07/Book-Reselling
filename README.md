@@ -52,6 +52,8 @@ Book images continue to use `express-fileupload` and are stored in `public/book_
 
 `render.yaml` targets Render and starts the Express process normally. Local uploads on Render's default filesystem can be lost when an instance restarts or is redeployed; configure a persistent disk on a plan that supports it and mount it for `public/book_img` before relying on uploads in production. Vercel's serverless filesystem is not durable or generally writable, so the existing `vercel.json` does not make local image uploads production-persistent there. The existing MongoDB-backed session store works across server instances when all instances share the same database.
 
+For Vercel, add `MONGODB_URI`, `MONGODB_DB_NAME`, and a 32+ character `SESSION_SECRET` to the project's Environment Variables for the production deployment (and Preview if testing previews). The checked-in local `.env` is ignored by Git and is not automatically copied into Vercel's runtime environment. Confirm the MongoDB provider permits connections from the deployed function. Startup failures return a generic 503 page; the function log records a sanitized reason.
+
 ### Environment variable names
 
 `PORT`, `NODE_ENV`, `MONGODB_URI`, `MONGODB_DB_NAME`, `SESSION_SECRET`, `TRUST_PROXY`, `ADMIN_NAME`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, and optional `MONGODB_CONNECT_TIMEOUT_MS`. Values belong in the host's secret/environment settings, not source control.

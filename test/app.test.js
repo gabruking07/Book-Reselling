@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const bcrypt = require('bcryptjs');
 const request = require('supertest');
 const session = require('express-session');
-const { createApp } = require('../index');
+const { createApp, safeErrorDetail } = require('../index');
 
 class MemoryCollection {
   constructor(rows = []) { this.rows = rows; this.failFind = false; }
@@ -229,6 +229,21 @@ test('database errors return a generic response without leaking driver details',
   assert.equal(response.status, 500);
   assert.match(response.text, /Something went wrong/);
   assert.doesNotMatch(response.text, /database unavailable|MONGODB_URI|password/i);
+});
+
+test('startup diagnostics redact MongoDB URIs and configured secrets', () => {
+  const oldUri = process.env.MONGODB_URI;
+  const oldSecret = process.env.SESSION_SECRET;
+  process.env.MONGODB_URI = 'mongodb://sample-user:sample-password@example.test/app';
+  process.env.SESSION_SECRET = 'sample-session-secret';
+  try {
+    const detail = safeErrorDetail(new Error('Connection failed for mongodb://sample-user:sample-password@example.test/app using sample-session-secret'));
+    assert.doesNotMatch(detail, /sample-user|sample-password|sample-session-secret/);
+    assert.match(detail, /redacted/i);
+  } finally {
+    if (oldUri === undefined) delete process.env.MONGODB_URI; else process.env.MONGODB_URI = oldUri;
+    if (oldSecret === undefined) delete process.env.SESSION_SECRET; else process.env.SESSION_SECRET = oldSecret;
+  }
 });
 
 test('existing public and administrator EJS pages still render', async () => {
