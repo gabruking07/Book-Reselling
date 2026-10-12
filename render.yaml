@@ -15,11 +15,5 @@ services:
         sync: false
       - key: TRUST_PROXY
         value: "1"
-      - key: ADMIN_NAME
-        value: Administrator
-      - key: ADMIN_EMAIL
-        sync: false
-      - key: ADMIN_PASSWORD
-        sync: false
       - key: NODE_VERSION
         value: 20

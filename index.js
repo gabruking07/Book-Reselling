@@ -24,7 +24,7 @@ function httpError(status, message) {
 
 function safeErrorDetail(error) {
   let detail = String(error?.message || error?.name || 'Unexpected error');
-  for (const key of ['MONGODB_URI', 'SESSION_SECRET', 'ADMIN_PASSWORD']) {
+  for (const key of ['MONGODB_URI', 'SESSION_SECRET']) {
     const value = process.env[key];
     if (value) detail = detail.split(value).join('[redacted]');
   }
@@ -168,15 +168,23 @@ function createApp({ collections, sessionStore, sessionSecret, secureCookies, tr
     return true;
   }
 
+  async function findAccountByEmail(collection, email) {
+    const exactMatch = await collection.findOne({ email_id: email });
+    if (exactMatch) return exactMatch;
+    // Older admin records may have been saved with mixed-case email addresses.
+    const escapedEmail = email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return collection.findOne({ email_id: { $regex: `^${escapedEmail}$`, $options: 'i' } });
+  }
+
   app.post('/log_user', route(async (req, res) => {
     const email = String(req.body.txtemail || '').trim().toLowerCase();
     const password = String(req.body.txtpwd || '');
     if (!email || !password || email.length > 254 || password.length > 200) throw httpError(400, 'Enter a valid email and password.');
-    let account = await collections.admins.findOne({ email_id: email });
+    let account = await findAccountByEmail(collections.admins, email);
     let role = 'admin';
     let accountCollection = collections.admins;
     if (!account || !(await migratePassword(accountCollection, account, password))) {
-      account = await collections.customers.findOne({ email_id: email });
+      account = await findAccountByEmail(collections.customers, email);
       role = 'customer';
       accountCollection = collections.customers;
     }
@@ -217,7 +225,7 @@ function createApp({ collections, sessionStore, sessionSecret, secureCookies, tr
     redirectWithMessage(req, res, '/login', 'Registration successful. Please sign in.');
   }));
 
-  // Admin accounts are provisioned through ADMIN_* environment variables or by an existing administrator.
+  // Admin accounts are provisioned directly in MongoDB or by an existing administrator.
   app.post('/add_admin', requireAdmin, route(async (req, res) => {
     const name = validateText(req.body.txtname, 'Name', 100);
     const email = validateText(req.body.txtemail, 'Email', 254).toLowerCase();
@@ -447,15 +455,6 @@ async function initialize() {
       admins: db.collection('admin_detail'), customers: db.collection('customer_details'), categories: db.collection('category_master'),
       books: db.collection('book_detail'), orders: db.collection('order_detail'),
     };
-    const bootstrapEmail = process.env.ADMIN_EMAIL?.trim().toLowerCase();
-    const bootstrapPassword = process.env.ADMIN_PASSWORD;
-    if (Boolean(bootstrapEmail) !== Boolean(bootstrapPassword)) throw new Error('Set both ADMIN_EMAIL and ADMIN_PASSWORD to bootstrap an administrator.');
-    if (bootstrapPassword && (bootstrapPassword.length < 12 || Buffer.byteLength(bootstrapPassword, 'utf8') > 72)) throw new Error('ADMIN_PASSWORD must contain at least 12 characters and no more than 72 UTF-8 bytes.');
-    if (bootstrapEmail && !/^\S+@\S+\.\S+$/.test(bootstrapEmail)) throw new Error('ADMIN_EMAIL must be a valid email address.');
-    if (bootstrapEmail && bootstrapPassword && !(await collections.admins.findOne({ email_id: bootstrapEmail }))) {
-      const admins = await collections.admins.find().sort({ admin_id: -1 }).limit(1).toArray();
-      await collections.admins.insertOne({ admin_id: admins.length ? (Number(admins[0].admin_id) || 0) + 1 : 1, admin_name: process.env.ADMIN_NAME?.trim() || 'Administrator', email_id: bootstrapEmail, password_hash: await bcrypt.hash(bootstrapPassword, BCRYPT_ROUNDS) });
-    }
     activeApp = createApp({
       collections, sessionStore: createMongoSessionStore(mongoClient, dbName), sessionSecret: process.env.SESSION_SECRET,
       trustProxy: process.env.TRUST_PROXY === '1' ? 1 : false,

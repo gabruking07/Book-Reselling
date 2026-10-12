@@ -16,7 +16,7 @@ npm ci
 Copy-Item .env.example .env
 ```
 
-Edit `.env` and set `MONGODB_URI`, `SESSION_SECRET` (a unique random value of at least 32 characters), and optionally both `ADMIN_EMAIL` and `ADMIN_PASSWORD` to create the first administrator on startup. The bootstrap password must be at least 12 characters and no more than 72 UTF-8 bytes because bcrypt only processes up to 72 bytes. Existing administrator accounts are not overwritten by bootstrap settings. Do not commit `.env`.
+Edit `.env` and set `MONGODB_URI` and `SESSION_SECRET` (a unique random value of at least 32 characters). Admin login uses the account documents already stored in MongoDB's `admin_detail` collection; administrator email addresses and passwords do not belong in environment variables. Do not commit `.env`.
 
 On macOS/Linux, copy the example with `cp .env.example .env`.
 
@@ -44,7 +44,7 @@ Customer and administrator documents using the old `pwd` field remain intact unt
 
 Sessions are persisted in the existing MongoDB database's `sessions` collection. The cookie is HTTP-only, SameSite=Lax, and Secure automatically for HTTPS requests. Set `TRUST_PROXY=1` when hosted behind a trusted single reverse proxy so Express can detect HTTPS. Production startup requires `SESSION_SECRET`.
 
-Public customer registration remains available. Public administrator registration has been removed; an administrator can create another administrator from the protected `/admin_registration` page. To provision the first administrator, set `ADMIN_EMAIL` and `ADMIN_PASSWORD` before first startup.
+Public customer registration remains available. Public administrator registration has been removed; provision the first administrator directly in MongoDB's `admin_detail` collection, then an administrator can create additional administrators from the protected `/admin_registration` page. Admin documents can use `email_id` plus `password_hash` (bcrypt) or the legacy `email_id` plus `pwd` fields; successful legacy login upgrades the password to `password_hash`.
 
 ## Uploads and hosting
 
@@ -56,4 +56,4 @@ For Vercel, add `MONGODB_URI`, `MONGODB_DB_NAME`, and a 32+ character `SESSION_S
 
 ### Environment variable names
 
-`PORT`, `NODE_ENV`, `MONGODB_URI`, `MONGODB_DB_NAME`, `SESSION_SECRET`, `TRUST_PROXY`, `ADMIN_NAME`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, and optional `MONGODB_CONNECT_TIMEOUT_MS`. Values belong in the host's secret/environment settings, not source control.
+`PORT`, `NODE_ENV`, `MONGODB_URI`, `MONGODB_DB_NAME`, `SESSION_SECRET`, `TRUST_PROXY`, and optional `MONGODB_CONNECT_TIMEOUT_MS`. Admin login credentials are stored in MongoDB, not environment settings.

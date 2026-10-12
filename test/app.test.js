@@ -7,7 +7,12 @@ const { createApp, safeErrorDetail } = require('../index');
 
 class MemoryCollection {
   constructor(rows = []) { this.rows = rows; this.failFind = false; }
-  matches(row, filter = {}) { return Object.entries(filter).every(([key, value]) => row[key] === value); }
+  matches(row, filter = {}) {
+    return Object.entries(filter).every(([key, value]) => {
+      if (value && value.$regex !== undefined) return new RegExp(value.$regex, value.$options || '').test(row[key] || '');
+      return row[key] === value;
+    });
+  }
   async findOne(filter) { if (this.failFind) throw new Error('database unavailable'); return this.rows.find(row => this.matches(row, filter)) || null; }
   find(filter = {}) {
     const collection = this;
