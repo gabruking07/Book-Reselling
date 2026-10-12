@@ -10,6 +10,7 @@
             
             <div class="col-md-6">
                 <form method="post" action="/update_book" enctype="multipart/form-data">
+                    <input type="hidden" name="_csrf" value="<%= csrfToken %>">
                     <div class="form-group">
                         <label for="exampleInputEmail1">Book ID</label>
                         <input type="text" class="form-control" name="txtbid"  value="<%= bookitems[0].book_id %>" readonly>

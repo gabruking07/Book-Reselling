@@ -1,603 +1,480 @@
 const express = require('express');
-const app = express();
 const path = require('path');
 const fs = require('fs');
-const ejs = require('ejs');
-const fileupload = require("express-fileupload");
-const expresslayouts = require('express-ejs-layouts');
-var mongodb = require('mongodb')
-var MongoClient = require('mongodb').MongoClient;
-app.set('views',path.join(__dirname,'/views/'));
-app.set('view engine','ejs')
-app.set('layout','layouts/mainlayouts');
+const crypto = require('crypto');
+const fileUpload = require('express-fileupload');
+const expressLayouts = require('express-ejs-layouts');
+const session = require('express-session');
+const MongoStore = require('connect-mongo');
+const bcrypt = require('bcryptjs');
+const { MongoClient } = require('mongodb');
 
-app.use(expresslayouts);
-app.use(fileupload());
-app.use(express.static(__dirname+"/public"));
-app.use(express.urlencoded({extended:false}));
+const appRoot = __dirname;
+const uploadDir = path.join(appRoot, 'public', 'book_img');
+const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
+const BCRYPT_ROUNDS = 12;
 
-const port = process.env.PORT || 3000;
-const dbName = process.env.MONGODB_DB_NAME || "book_reselling";
-const url = process.env.MONGODB_URI || "mongodb://127.0.0.1:27017";
-const uploadDir = path.join(__dirname, "public", "book_img");
+fs.mkdirSync(uploadDir, { recursive: true });
 
-if (!fs.existsSync(uploadDir)) {
-    fs.mkdirSync(uploadDir, { recursive: true });
+function httpError(status, message) {
+  const error = new Error(message);
+  error.status = status;
+  return error;
 }
 
-var admin_detail_collection;
-var customer_details_collection;
-var category_master_collection;
-var book_detail_collection;
-var order_detail_collection;
-let currentCustomer = null;
-let currentAdmin = null;
+function parsePositiveId(value) {
+  if (!/^\d+$/.test(String(value || ''))) return null;
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number > 0 ? number : null;
+}
 
-app.use(function(req, res, next) {
-    res.locals.currentCustomer = currentCustomer;
-    res.locals.currentAdmin = currentAdmin;
+function parsePrice(value) {
+  const normalized = String(value || '').trim();
+  if (!/^\d+(?:\.\d{1,2})?$/.test(normalized)) return null;
+  const amount = Number(normalized);
+  return Number.isFinite(amount) && amount > 0 ? Math.round(amount * 100) / 100 : null;
+}
+
+function validateText(value, label, maxLength, required = true) {
+  const text = String(value || '').trim();
+  if (required && !text) throw httpError(400, `${label} is required.`);
+  if (text.length > maxLength) throw httpError(400, `${label} must be ${maxLength} characters or fewer.`);
+  return text;
+}
+
+function getImageInfo(file) {
+  if (!file || !Buffer.isBuffer(file.data) || file.data.length === 0) throw httpError(400, 'Choose a book image to upload.');
+  if (file.data.length > MAX_UPLOAD_BYTES) throw httpError(413, 'Book images must be 5 MB or smaller.');
+  const data = file.data;
+  if (data.length >= 3 && data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff) return { extension: '.jpg' };
+  if (data.length >= 8 && data.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return { extension: '.png' };
+  if (data.length >= 12 && data.toString('ascii', 0, 4) === 'RIFF' && data.toString('ascii', 8, 12) === 'WEBP') return { extension: '.webp' };
+  if (data.length >= 6 && ['GIF87a', 'GIF89a'].includes(data.toString('ascii', 0, 6))) return { extension: '.gif' };
+  throw httpError(400, 'Upload a valid JPEG, PNG, GIF, or WebP image.');
+}
+
+function getCsrfToken(req) {
+  if (!req.session.csrfToken) req.session.csrfToken = crypto.randomBytes(32).toString('hex');
+  return req.session.csrfToken;
+}
+
+function createApp({ collections, sessionStore, sessionSecret, secureCookies, trustProxy = false } = {}) {
+  const app = express();
+  if (trustProxy) app.set('trust proxy', trustProxy === true ? 1 : trustProxy);
+  app.set('views', path.join(appRoot, 'views'));
+  app.set('view engine', 'ejs');
+  app.set('layout', 'layouts/mainlayouts');
+  app.disable('x-powered-by');
+
+  app.use(expressLayouts);
+  app.use(fileUpload({ limits: { fileSize: MAX_UPLOAD_BYTES, files: 1 }, abortOnLimit: true, useTempFiles: false, safeFileNames: true, preserveExtension: 4 }));
+  app.use(express.urlencoded({ extended: false, limit: '20kb' }));
+  app.use(express.static(path.join(appRoot, 'public'), { fallthrough: true }));
+  app.use(session({
+    name: 'bookreselling.sid',
+    secret: sessionSecret || (process.env.NODE_ENV === 'production' ? undefined : crypto.randomBytes(32).toString('hex')),
+    store: sessionStore,
+    resave: false,
+    saveUninitialized: false,
+    cookie: { httpOnly: true, secure: secureCookies === undefined ? 'auto' : secureCookies, sameSite: 'lax', maxAge: 1000 * 60 * 60 * 8 },
+  }));
+
+  app.use((req, res, next) => {
+    res.locals.currentCustomer = req.session.user?.role === 'customer' ? req.session.user : null;
+    res.locals.currentAdmin = req.session.user?.role === 'admin' ? req.session.user : null;
+    res.locals.csrfToken = getCsrfToken(req);
+    res.locals.flashMessage = req.session.flashMessage || null;
+    delete req.session.flashMessage;
     next();
-});
+  });
 
-function ensureCustomer(res) {
-    if (!currentCustomer) {
-        res.send("<script> alert('Please login as customer first'); window.location.href='/login'; </script>");
-        return false;
+  app.get('/health', async (req, res) => {
+    try {
+      if (!collections) return res.status(503).send('Database unavailable');
+      await collections.admins.database.admin().ping();
+      res.status(200).send('OK');
+    } catch (_) {
+      res.status(503).send('Database unavailable');
     }
+  });
+
+  app.use((req, res, next) => {
+    if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return next();
+    const token = req.body?._csrf || req.headers['x-csrf-token'];
+    const supplied = Buffer.from(String(token));
+    const expected = Buffer.from(req.session.csrfToken || '');
+    if (!token || supplied.length !== expected.length || !expected.length || !crypto.timingSafeEqual(supplied, expected)) {
+      return next(httpError(403, 'Your form has expired. Please try again.'));
+    }
+    next();
+  });
+
+  function requireCustomer(req, res, next) {
+    if (req.session.user?.role !== 'customer') {
+      req.session.flashMessage = 'Please log in as a customer to continue.';
+      return res.redirect('/login');
+    }
+    next();
+  }
+
+  function requireAdmin(req, res, next) {
+    if (req.session.user?.role !== 'admin') {
+      req.session.flashMessage = 'Administrator access is required.';
+      return res.redirect('/login');
+    }
+    next();
+  }
+
+  function route(handler) {
+    return (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
+  }
+
+  function redirectWithMessage(req, res, location, message) {
+    req.session.flashMessage = message;
+    res.redirect(location);
+  }
+
+  function requireCollections(req, res, next) {
+    if (!collections) return next(httpError(503, 'The database is not ready. Please try again shortly.'));
+    next();
+  }
+  app.use(requireCollections);
+
+  app.get('/', (req, res) => res.render('default/home'));
+  app.get('/about', (req, res) => res.render('default/about'));
+  app.get('/contact', (req, res) => res.render('default/contact'));
+  app.get('/registration', (req, res) => res.render('default/registration'));
+  app.get('/admin_registration', requireAdmin, (req, res) => res.render('default/admin_registration'));
+  app.get('/login', (req, res) => res.render('default/login'));
+
+  async function migratePassword(collection, account, submittedPassword) {
+    const storedHash = account.password_hash;
+    if (storedHash) return bcrypt.compare(submittedPassword, storedHash);
+    if (typeof account.pwd !== 'string' || account.pwd !== submittedPassword) return false;
+    const passwordHash = await bcrypt.hash(submittedPassword, BCRYPT_ROUNDS);
+    await collection.updateOne({ _id: account._id }, { $set: { password_hash: passwordHash }, $unset: { pwd: '' } });
     return true;
+  }
+
+  app.post('/log_user', route(async (req, res) => {
+    const email = String(req.body.txtemail || '').trim().toLowerCase();
+    const password = String(req.body.txtpwd || '');
+    if (!email || !password || email.length > 254 || password.length > 200) throw httpError(400, 'Enter a valid email and password.');
+    let account = await collections.admins.findOne({ email_id: email });
+    let role = 'admin';
+    let accountCollection = collections.admins;
+    if (!account || !(await migratePassword(accountCollection, account, password))) {
+      account = await collections.customers.findOne({ email_id: email });
+      role = 'customer';
+      accountCollection = collections.customers;
+    }
+    if (!account || !(await migratePassword(accountCollection, account, password))) throw httpError(401, 'Email or password is incorrect.');
+    await new Promise((resolve, reject) => req.session.regenerate(error => error ? reject(error) : resolve()));
+    req.session.user = role === 'admin'
+      ? { role, id: String(account._id), admin_id: account.admin_id, name: account.admin_name, email: account.email_id }
+      : { role, id: String(account._id), customer_id: account.customer_id, name: account.customer_name, email: account.email_id };
+    await new Promise((resolve, reject) => req.session.save(error => error ? reject(error) : resolve()));
+    res.redirect(role === 'admin' ? '/admin_manage_cat' : '/books');
+  }));
+
+  app.post('/logout', (req, res, next) => {
+    req.session.destroy(error => {
+      if (error) return next(error);
+      res.clearCookie('bookreselling.sid', { httpOnly: true, sameSite: 'lax', secure: secureCookies === undefined ? 'auto' : secureCookies });
+      res.redirect('/');
+    });
+  });
+  app.get('/logout', (req, res) => res.sendStatus(405));
+
+  app.post('/add_customer', route(async (req, res) => {
+    const customer = {
+      customer_name: validateText(req.body.txtname, 'Name', 100),
+      address: validateText(req.body.txtadd, 'Address', 300),
+      city: validateText(req.body.txtcity, 'City', 100),
+      mobile_no: validateText(req.body.txtmno, 'Mobile number', 30),
+      email_id: validateText(req.body.txtemail, 'Email', 254).toLowerCase(),
+    };
+    if (!/^\S+@\S+\.\S+$/.test(customer.email_id)) throw httpError(400, 'Enter a valid email address.');
+    const password = String(req.body.txtpwd || '');
+    if (password.length < 8 || password.length > 200 || Buffer.byteLength(password, 'utf8') > 72) throw httpError(400, 'Password must be 8 or more characters and no more than 72 UTF-8 bytes.');
+    if (await collections.customers.findOne({ email_id: customer.email_id })) throw httpError(409, 'An account with that email already exists.');
+    const last = await collections.customers.find().sort({ customer_id: -1 }).limit(1).toArray();
+    customer.customer_id = last.length ? (Number(last[0].customer_id) || 0) + 1 : 1;
+    customer.password_hash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+    await collections.customers.insertOne(customer);
+    redirectWithMessage(req, res, '/login', 'Registration successful. Please sign in.');
+  }));
+
+  // Admin accounts are provisioned through ADMIN_* environment variables or by an existing administrator.
+  app.post('/add_admin', requireAdmin, route(async (req, res) => {
+    const name = validateText(req.body.txtname, 'Name', 100);
+    const email = validateText(req.body.txtemail, 'Email', 254).toLowerCase();
+    const password = String(req.body.txtpwd || '');
+    if (!/^\S+@\S+\.\S+$/.test(email) || password.length < 12 || password.length > 200 || Buffer.byteLength(password, 'utf8') > 72) throw httpError(400, 'Enter a valid email and a password of at least 12 characters (72 UTF-8 bytes maximum).');
+    if (await collections.admins.findOne({ email_id: email })) throw httpError(409, 'An administrator with that email already exists.');
+    const last = await collections.admins.find().sort({ admin_id: -1 }).limit(1).toArray();
+    await collections.admins.insertOne({ admin_id: last.length ? (Number(last[0].admin_id) || 0) + 1 : 1, admin_name: name, email_id: email, password_hash: await bcrypt.hash(password, BCRYPT_ROUNDS) });
+    redirectWithMessage(req, res, '/admin_manage_cat', 'Administrator account created.');
+  }));
+
+  app.get('/books', route(async (req, res) => {
+    const [categories, books] = await Promise.all([collections.categories.find().toArray(), collections.books.find().toArray()]);
+    const booksWithCategory = books.map(book => ({ ...book, category_name: categories.find(item => item.category_id === book.category_id)?.category || 'Unknown' }));
+    res.render('default/view_books', { categories, bookitems: booksWithCategory });
+  }));
+
+  app.get('/buy_book/:bid', requireCustomer, route(async (req, res) => {
+    const bookId = parsePositiveId(req.params.bid);
+    if (!bookId) throw httpError(400, 'Invalid book ID.');
+    const book = await collections.books.findOne({ book_id: bookId });
+    if (!book) throw httpError(404, 'Book not found.');
+    const category = await collections.categories.findOne({ category_id: book.category_id });
+    req.session.orderToken = crypto.randomBytes(24).toString('hex');
+    res.render('default/buy_book', { bookitem: { ...book, category_name: category?.category || 'Unknown' }, orderToken: req.session.orderToken });
+  }));
+
+  app.post('/place_order', requireCustomer, route(async (req, res) => {
+    const bookId = parsePositiveId(req.body.txtbid);
+    const quantity = parsePositiveId(req.body.txtqty);
+    if (!bookId) throw httpError(400, 'Choose a valid book.');
+    if (!quantity || quantity > 100) throw httpError(400, 'Quantity must be between 1 and 100.');
+    const token = String(req.body.orderToken || '');
+    if (!token || !req.session.orderToken || token !== req.session.orderToken) throw httpError(409, 'This order form has already been submitted or expired. Please try again.');
+    req.session.orderToken = null;
+    const [book, customer] = await Promise.all([
+      collections.books.findOne({ book_id: bookId }),
+      collections.customers.findOne({ customer_id: req.session.user.customer_id }),
+    ]);
+    if (!book) throw httpError(404, 'Book not found.');
+    if (!customer) throw httpError(401, 'Please sign in again to place an order.');
+    const price = parsePrice(book.book_price);
+    if (price === null) throw httpError(409, 'This book does not have a valid price and cannot be ordered.');
+    const category = await collections.categories.findOne({ category_id: book.category_id });
+    const last = await collections.orders.find().sort({ order_id: -1 }).limit(1).toArray();
+    const orderId = last.length ? (Number(last[0].order_id) || 0) + 1 : 1;
+    const totalAmount = Math.round(price * quantity * 100) / 100;
+    await collections.orders.insertOne({
+      order_id: orderId, customer_id: customer.customer_id, customer_name: customer.customer_name,
+      email_id: customer.email_id, address: customer.address, city: customer.city, mobile_no: customer.mobile_no,
+      book_id: book.book_id, book_name: book.book_name, category_name: category?.category || 'Unknown',
+      book_img: book.book_img, book_price: price, quantity, total_amount: totalAmount,
+      order_date: new Date().toLocaleDateString('en-GB'), status: 'Placed',
+    });
+    redirectWithMessage(req, res, '/my_orders', 'Order placed successfully.');
+  }));
+
+  app.get('/my_orders', requireCustomer, route(async (req, res) => {
+    const orders = await collections.orders.find({ customer_id: req.session.user.customer_id }).sort({ order_id: -1 }).toArray();
+    res.render('default/my_orders', { orderitems: orders });
+  }));
+
+  app.get('/admin_manage_cat', requireAdmin, route(async (req, res) => {
+    res.render('admin/admin_manage_cat', { layout: 'layouts/adminlayouts', catitems: await collections.categories.find().toArray() });
+  }));
+  app.post('/add_cat', requireAdmin, route(async (req, res) => {
+    const category = validateText(req.body.txtcat, 'Category', 100);
+    if (await collections.categories.findOne({ category })) throw httpError(409, 'That category already exists.');
+    const last = await collections.categories.find().sort({ category_id: -1 }).limit(1).toArray();
+    await collections.categories.insertOne({ category_id: last.length ? (Number(last[0].category_id) || 0) + 1 : 1, category });
+    redirectWithMessage(req, res, '/admin_manage_cat', 'Category saved.');
+  }));
+  app.post('/delete_category/:cid', requireAdmin, route(async (req, res) => {
+    const categoryId = parsePositiveId(req.params.cid);
+    if (!categoryId) throw httpError(400, 'Invalid category ID.');
+    if (await collections.books.findOne({ category_id: categoryId })) throw httpError(409, 'Move or delete books in this category before deleting it.');
+    const result = await collections.categories.deleteOne({ category_id: categoryId });
+    if (!result.deletedCount) throw httpError(404, 'Category not found.');
+    redirectWithMessage(req, res, '/admin_manage_cat', 'Category deleted.');
+  }));
+  app.get('/delete_category/:cid', (req, res) => res.sendStatus(405));
+  app.get('/edit_category/:cid', requireAdmin, route(async (req, res) => {
+    const categoryId = parsePositiveId(req.params.cid);
+    if (!categoryId) throw httpError(400, 'Invalid category ID.');
+    const category = await collections.categories.findOne({ category_id: categoryId });
+    if (!category) throw httpError(404, 'Category not found.');
+    res.render('admin/admin_update_cat', { layout: 'layouts/adminlayouts', catitems: [category] });
+  }));
+  app.post('/update_cat', requireAdmin, route(async (req, res) => {
+    const categoryId = parsePositiveId(req.body.txtcatid);
+    const category = validateText(req.body.txtcat, 'Category', 100);
+    if (!categoryId) throw httpError(400, 'Invalid category ID.');
+    const result = await collections.categories.updateOne({ category_id: categoryId }, { $set: { category } });
+    if (!result.matchedCount) throw httpError(404, 'Category not found.');
+    redirectWithMessage(req, res, '/admin_manage_cat', 'Category updated.');
+  }));
+
+  app.get('/admin_manage_book', requireAdmin, route(async (req, res) => {
+    const [catitems, bookitems] = await Promise.all([collections.categories.find().toArray(), collections.books.find().toArray()]);
+    res.render('admin/admin_manage_book', { layout: 'layouts/adminlayouts', catitems, bookitems });
+  }));
+  app.post('/add_book', requireAdmin, route(async (req, res) => {
+    const book_name = validateText(req.body.txtname, 'Book title', 200);
+    const description = validateText(req.body.txtdesc, 'Description', 5000, false);
+    const category_id = parsePositiveId(req.body.selcat);
+    const book_price = parsePrice(req.body.txtprice);
+    if (!category_id || !(await collections.categories.findOne({ category_id }))) throw httpError(400, 'Choose a valid category.');
+    if (book_price === null) throw httpError(400, 'Enter a price greater than zero with up to two decimal places.');
+    const file = req.files?.txtimg;
+    if (Array.isArray(file)) throw httpError(400, 'Upload only one book image.');
+    const image = getImageInfo(file);
+    const fileName = `${crypto.randomUUID()}${image.extension}`;
+    const imagePath = path.join(uploadDir, fileName);
+    await fs.promises.writeFile(imagePath, file.data, { flag: 'wx' });
+    try {
+      const last = await collections.books.find().sort({ book_id: -1 }).limit(1).toArray();
+      const book_id = last.length ? (Number(last[0].book_id) || 0) + 1 : 1;
+      await collections.books.insertOne({ book_id, book_name, category_id, description, book_price, book_img: `/book_img/${fileName}` });
+    } catch (error) {
+      await fs.promises.unlink(imagePath).catch(() => {});
+      throw error;
+    }
+    redirectWithMessage(req, res, '/admin_manage_book', 'Book saved.');
+  }));
+  app.post('/delete_book/:bid', requireAdmin, route(async (req, res) => {
+    const bookId = parsePositiveId(req.params.bid);
+    if (!bookId) throw httpError(400, 'Invalid book ID.');
+    const result = await collections.books.deleteOne({ book_id: bookId });
+    if (!result.deletedCount) throw httpError(404, 'Book not found.');
+    redirectWithMessage(req, res, '/admin_manage_book', 'Book deleted.');
+  }));
+  app.get('/delete_book/:bid', (req, res) => res.sendStatus(405));
+  app.get('/edit_book/:bid', requireAdmin, route(async (req, res) => {
+    const bookId = parsePositiveId(req.params.bid);
+    if (!bookId) throw httpError(400, 'Invalid book ID.');
+    const [categoryItems, book] = await Promise.all([collections.categories.find().toArray(), collections.books.findOne({ book_id: bookId })]);
+    if (!book) throw httpError(404, 'Book not found.');
+    res.render('admin/admin_update_book', { layout: 'layouts/adminlayouts', catitems: categoryItems, bookitems: [book] });
+  }));
+  app.post('/update_book', requireAdmin, route(async (req, res) => {
+    const bookId = parsePositiveId(req.body.txtbid);
+    const book_name = validateText(req.body.txtname, 'Book title', 200);
+    const description = validateText(req.body.txtdesc, 'Description', 5000, false);
+    const category_id = parsePositiveId(req.body.selcat);
+    const book_price = parsePrice(req.body.txtprice);
+    if (!bookId) throw httpError(400, 'Invalid book ID.');
+    if (!category_id || !(await collections.categories.findOne({ category_id }))) throw httpError(400, 'Choose a valid category.');
+    if (book_price === null) throw httpError(400, 'Enter a price greater than zero with up to two decimal places.');
+    const update = { book_name, category_id, description, book_price };
+    const file = req.files?.txtimg;
+    let imagePath;
+    if (file) {
+      if (Array.isArray(file)) throw httpError(400, 'Upload only one book image.');
+      const image = getImageInfo(file);
+      const fileName = `${crypto.randomUUID()}${image.extension}`;
+      imagePath = path.join(uploadDir, fileName);
+      await fs.promises.writeFile(imagePath, file.data, { flag: 'wx' });
+      update.book_img = `/book_img/${fileName}`;
+    }
+    try {
+      const result = await collections.books.updateOne({ book_id: bookId }, { $set: update });
+      if (!result.matchedCount) throw httpError(404, 'Book not found.');
+    } catch (error) {
+      if (imagePath) await fs.promises.unlink(imagePath).catch(() => {});
+      throw error;
+    }
+    redirectWithMessage(req, res, '/admin_manage_book', 'Book updated.');
+  }));
+
+  app.get('/admin_reports', requireAdmin, route(async (req, res) => {
+    const [categories, books, customers, orders] = await Promise.all([
+      collections.categories.find().toArray(), collections.books.find().toArray(), collections.customers.find().project({ pwd: 0, password_hash: 0 }).toArray(), collections.orders.find().toArray(),
+    ]);
+    const booksWithCategory = books.map(book => ({ ...book, category_name: categories.find(item => item.category_id === book.category_id)?.category || 'Unknown' }));
+    res.render('admin/admin_reports', { layout: 'layouts/adminlayouts', totalCategories: categories.length, totalBooks: books.length, totalCustomers: customers.length, totalOrders: orders.length, reportBooks: booksWithCategory, reportCustomers: customers, reportOrders: orders });
+  }));
+  app.get('/admin_orders', requireAdmin, route(async (req, res) => {
+    const orderitems = await collections.orders.find().sort({ order_id: -1 }).toArray();
+    res.render('admin/admin_orders', { layout: 'layouts/adminlayouts', orderitems });
+  }));
+  app.get('/admin_bill/:oid', requireAdmin, route(async (req, res) => {
+    const orderId = parsePositiveId(req.params.oid);
+    if (!orderId) throw httpError(400, 'Invalid order ID.');
+    const orderitem = await collections.orders.findOne({ order_id: orderId });
+    if (!orderitem) throw httpError(404, 'Order not found.');
+    res.render('admin/admin_bill', { layout: 'layouts/adminlayouts', orderitem });
+  }));
+
+  app.use((err, req, res, next) => {
+    if (res.headersSent) return next(err);
+    const status = Number.isInteger(err.status) ? err.status : 500;
+    if (status >= 500) console.error('Request failed:', err.name || 'Error');
+    if (req.accepts('html')) {
+      req.session.flashMessage = status >= 500 ? 'Something went wrong. Please try again.' : err.message;
+      let returnPath = '/';
+      try {
+        const candidate = new URL(req.get('referer') || '/', 'http://bookreselling.local');
+        if (candidate.pathname.startsWith('/') && !candidate.pathname.startsWith('//')) returnPath = candidate.pathname + candidate.search;
+      } catch (_) {}
+      return res.redirect(status === 401 || status === 403 ? '/login' : returnPath);
+    }
+    res.status(status).send(status >= 500 ? 'Something went wrong. Please try again.' : err.message);
+  });
+  return app;
 }
 
-function ensureAdmin(res) {
-    if (!currentAdmin) {
-        res.send("<script> alert('Please login as admin first'); window.location.href='/login'; </script>");
-        return false;
-    }
-    return true;
+function createMongoSessionStore(client, dbName) {
+  return MongoStore.create({ client, dbName, collectionName: 'sessions', ttl: 60 * 60 * 8, autoRemove: 'native' });
 }
 
-MongoClient.connect(url, function(err, client){
-    if(err) {
-        console.error("Database connection failed", err);
-        process.exit(1);
+let mongoClient;
+let readyPromise;
+let activeApp;
+async function initialize() {
+  if (readyPromise) return readyPromise;
+  readyPromise = (async () => {
+    if (process.env.NODE_ENV === 'production' && (!process.env.SESSION_SECRET || process.env.SESSION_SECRET.length < 32)) {
+      throw new Error('SESSION_SECRET must be set to at least 32 characters in production.');
     }
-
-    const db = client.db(dbName);
-    admin_detail_collection = db.collection("admin_detail");
-    customer_details_collection = db.collection("customer_details");
-    category_master_collection = db.collection("category_master");
-    book_detail_collection = db.collection("book_detail");
-    order_detail_collection = db.collection("order_detail");
-    console.log("Database connected successfully");
-
-    if (!process.env.VERCEL) {
-        app.listen(port, function(){
-            console.log(`Server started on port ${port}`);
-        });
+    if (process.env.NODE_ENV === 'production' && !process.env.MONGODB_URI) throw new Error('MONGODB_URI is required in production.');
+    const uri = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017';
+    const dbName = process.env.MONGODB_DB_NAME || 'book_reselling';
+    mongoClient = new MongoClient(uri, { serverSelectionTimeoutMS: Number(process.env.MONGODB_CONNECT_TIMEOUT_MS) || 10000 });
+    await mongoClient.connect();
+    const db = mongoClient.db(dbName);
+    const collections = {
+      admins: db.collection('admin_detail'), customers: db.collection('customer_details'), categories: db.collection('category_master'),
+      books: db.collection('book_detail'), orders: db.collection('order_detail'),
+    };
+    const bootstrapEmail = process.env.ADMIN_EMAIL?.trim().toLowerCase();
+    const bootstrapPassword = process.env.ADMIN_PASSWORD;
+    if (Boolean(bootstrapEmail) !== Boolean(bootstrapPassword)) throw new Error('Set both ADMIN_EMAIL and ADMIN_PASSWORD to bootstrap an administrator.');
+    if (bootstrapPassword && (bootstrapPassword.length < 12 || Buffer.byteLength(bootstrapPassword, 'utf8') > 72)) throw new Error('ADMIN_PASSWORD must contain at least 12 characters and no more than 72 UTF-8 bytes.');
+    if (bootstrapEmail && !/^\S+@\S+\.\S+$/.test(bootstrapEmail)) throw new Error('ADMIN_EMAIL must be a valid email address.');
+    if (bootstrapEmail && bootstrapPassword && !(await collections.admins.findOne({ email_id: bootstrapEmail }))) {
+      const admins = await collections.admins.find().sort({ admin_id: -1 }).limit(1).toArray();
+      await collections.admins.insertOne({ admin_id: admins.length ? (Number(admins[0].admin_id) || 0) + 1 : 1, admin_name: process.env.ADMIN_NAME?.trim() || 'Administrator', email_id: bootstrapEmail, password_hash: await bcrypt.hash(bootstrapPassword, BCRYPT_ROUNDS) });
     }
-});
-
-module.exports = app;
-
-
-app.get("/",function(req,res){
-    res.render("default/home");
-})
-
-app.get("/health", function(req, res) {
-    res.status(200).send("OK");
-})
-
-
-app.get("/about",function(req,res){
-    res.render("default/about")
-})
-
-app.get("/contact",function(req,res){
-    res.render("default/contact")
-})
-
-app.get("/registration",function(req,res){
-    res.render("default/registration")
-})
-
-app.get("/admin_registration", function(req, res) {
-    res.redirect("/registration");
-})
-
-app.get("/login",function(req,res){
-    res.render("default/login")
-})
-
-app.post("/log_user",function(req,res){
-    const {txtemail,txtpwd} = req.body;
-    
-    admin_detail_collection.findOne({email_id: txtemail,pwd: txtpwd},function(err,result){
-        if(err) throw err;
-        if(result === null)
-        {
-            customer_details_collection.findOne({email_id: txtemail,pwd: txtpwd},function(err2,result2){
-                if(err2) throw err2;
-                if(result2 === null)
-                {
-                    res.send("<script> alert('Invalid Email Id Or Password'); window.location.href='/login'; </script>")
-                }else{
-                    currentCustomer = result2;
-                    currentAdmin = null;
-                    res.send("<script> alert('Customer Login Successfully'); window.location.href='/books'; </script>")
-                }
-            })
-            
-        }else{
-            currentAdmin = result;
-            currentCustomer = null;
-            res.send("<script> alert('Admin Login Successfully'); window.location.href='/admin_manage_cat'; </script>")
-        }
-    })
-})
-
-app.get("/logout",function(req,res){
-    currentCustomer = null;
-    currentAdmin = null;
-    res.redirect("/");
-})
-
-app.post("/add_customer",function(req,res){
-    const {txtname,txtadd,txtcity,txtmno,txtemail,txtpwd} = req.body;
-    customer_details_collection.findOne({email_id: txtemail},function(err,result){
-        if(err) throw err;
-        if(result === null)
-        {
-            let cust_id = 0;
-            
-            customer_details_collection.find().sort({customer_id: -1}).limit(1).toArray(function(err2,result2){
-                if(err2) throw err2;
-                if(result2.length == 0)
-                {
-                    cust_id=1;
-                }
-                else
-                {
-                    var row = JSON.parse(JSON.stringify(result2[0]))
-                    cust_id = row.customer_id + 1
-                }
-                customer_details_collection.insertOne({customer_id: cust_id,customer_name: txtname,address: txtadd,city: txtcity,mobile_no: txtmno,email_id: txtemail,pwd: txtpwd},function(err3,result3){
-                    if(err3) throw err3;
-                    res.send("<script> alert('Customer Registration Successfully'); window.location.href='/login'; </script>")                    
-                })
-            })
-        }else{
-            res.send("<script> alert('Email ID Already Exists'); window.location.href='/registration'; </script>")            
-        }
-    })
-})
-
-app.post("/add_admin", function(req, res) {
-    const {txtname, txtemail, txtpwd} = req.body;
-
-    admin_detail_collection.findOne({email_id: txtemail}, function(err, result) {
-        if (err) throw err;
-
-        if (result !== null) {
-            res.send("<script> alert('Admin Email ID Already Exists'); window.location.href='/registration'; </script>");
-            return;
-        }
-
-        admin_detail_collection.find().sort({admin_id: -1}).limit(1).toArray(function(err2, result2) {
-            if (err2) throw err2;
-
-            let adminId = 1;
-            if (result2.length !== 0) {
-                adminId = result2[0].admin_id + 1;
-            }
-
-            admin_detail_collection.insertOne({
-                admin_id: adminId,
-                admin_name: txtname,
-                email_id: txtemail,
-                pwd: txtpwd
-            }, function(err3) {
-                if (err3) throw err3;
-                res.send("<script> alert('Admin Registration Successfully'); window.location.href='/login'; </script>");
-            });
-        });
+    activeApp = createApp({
+      collections, sessionStore: createMongoSessionStore(mongoClient, dbName), sessionSecret: process.env.SESSION_SECRET,
+      trustProxy: process.env.TRUST_PROXY === '1' ? 1 : false,
     });
-});
+    console.log('Database connected successfully');
+    return activeApp;
+  })();
+  return readyPromise;
+}
 
-app.get("/books", function(req, res) {
-    category_master_collection.find().toArray(function(err, categories) {
-        if (err) throw err;
+if (require.main === module) {
+  const port = Number(process.env.PORT) || 3000;
+  initialize().then(serverApp => serverApp.listen(port, () => console.log(`Server started on port ${port}`))).catch(error => {
+    console.error('Application startup failed:', error.name || 'Error');
+    process.exitCode = 1;
+  });
+}
 
-        book_detail_collection.find().toArray(function(err2, books) {
-            if (err2) throw err2;
+async function vercelHandler(req, res) {
+  try {
+    const serverApp = await initialize();
+    return serverApp(req, res);
+  } catch (error) {
+    console.error('Application startup failed:', error.name || 'Error');
+    if (!res.headersSent) res.status(503).send('Service temporarily unavailable.');
+  }
+}
 
-            const booksWithCategory = books.map(function(book) {
-                const category = categories.find(function(item) {
-                    return item.category_id === book.category_id;
-                });
-
-                return {
-                    ...book,
-                    category_name: category ? category.category : "Unknown"
-                };
-            });
-
-            res.render("default/view_books", {
-                categories: categories,
-                bookitems: booksWithCategory
-            });
-        });
-    });
-});
-
-app.get("/buy_book/:bid", function(req, res) {
-    if (!ensureCustomer(res)) {
-        return;
-    }
-
-    const bookid = parseInt(req.params.bid);
-
-    category_master_collection.find().toArray(function(err, categories) {
-        if (err) throw err;
-
-        book_detail_collection.findOne({book_id: bookid}, function(err2, book) {
-            if (err2) throw err2;
-
-            if (!book) {
-                res.send("<script> alert('Book not found'); window.location.href='/books'; </script>");
-                return;
-            }
-
-            const category = categories.find(function(item) {
-                return item.category_id === book.category_id;
-            });
-
-            res.render("default/buy_book", {
-                bookitem: {
-                    ...book,
-                    category_name: category ? category.category : "Unknown"
-                }
-            });
-        });
-    });
-});
-
-app.post("/place_order", function(req, res) {
-    if (!ensureCustomer(res)) {
-        return;
-    }
-
-    const {txtbid, txtqty} = req.body;
-    const quantity = parseInt(txtqty);
-    const bookid = parseInt(txtbid);
-
-    if (!quantity || quantity < 1) {
-        res.send("<script> alert('Please enter valid quantity'); window.location.href='/books'; </script>");
-        return;
-    }
-
-    category_master_collection.find().toArray(function(err, categories) {
-        if (err) throw err;
-
-        book_detail_collection.findOne({book_id: bookid}, function(err2, book) {
-            if (err2) throw err2;
-
-            if (!book) {
-                res.send("<script> alert('Book not found'); window.location.href='/books'; </script>");
-                return;
-            }
-
-            order_detail_collection.find().sort({order_id: -1}).limit(1).toArray(function(err3, result3) {
-                if (err3) throw err3;
-
-                let orderId = 1;
-                if (result3.length !== 0) {
-                    orderId = result3[0].order_id + 1;
-                }
-
-                const category = categories.find(function(item) {
-                    return item.category_id === book.category_id;
-                });
-
-                const totalAmount = quantity * parseInt(book.book_price);
-
-                order_detail_collection.insertOne({
-                    order_id: orderId,
-                    customer_id: currentCustomer.customer_id,
-                    customer_name: currentCustomer.customer_name,
-                    email_id: currentCustomer.email_id,
-                    address: currentCustomer.address,
-                    city: currentCustomer.city,
-                    mobile_no: currentCustomer.mobile_no,
-                    book_id: book.book_id,
-                    book_name: book.book_name,
-                    category_name: category ? category.category : "Unknown",
-                    book_img: book.book_img,
-                    book_price: parseInt(book.book_price),
-                    quantity: quantity,
-                    total_amount: totalAmount,
-                    order_date: new Date().toLocaleDateString("en-GB"),
-                    status: "Placed"
-                }, function(err4) {
-                    if (err4) throw err4;
-                    res.send("<script> alert('Order placed successfully'); window.location.href='/my_orders'; </script>");
-                });
-            });
-        });
-    });
-});
-
-app.get("/my_orders", function(req, res) {
-    if (!ensureCustomer(res)) {
-        return;
-    }
-
-    order_detail_collection.find({customer_id: currentCustomer.customer_id}).sort({order_id: -1}).toArray(function(err, orders) {
-        if (err) throw err;
-
-        res.render("default/my_orders", {
-            orderitems: orders
-        });
-    });
-});
-
-app.get("/admin_manage_cat",function(req,res){
-    if (!ensureAdmin(res)) {
-        return;
-    }
-    category_master_collection.find().toArray(function(err,result){
-        res.render("admin/admin_manage_cat",{layout: "layouts/adminlayouts",catitems: result})
-    })
-})
-
-app.post("/add_cat",function(req,res){
-    if (!ensureAdmin(res)) {
-        return;
-    }
-    const {txtcat}  = req.body;
-    let catid=0;
-    category_master_collection.find().sort({category_id: -1}).limit(1).toArray(function(err2,result2){
-        if(err2) throw err2;
-        if(result2.length == 0)
-        {
-            catid=1;
-        }
-        else
-        {
-            var row = JSON.parse(JSON.stringify(result2[0]))
-            catid = row.category_id + 1
-        }
-        category_master_collection.insertOne({category_id: catid,category: txtcat},function(err3,result3){
-            if(err3) throw err3;
-            res.send("<script> alert('Category Saved Successfully'); window.location.href='/admin_manage_cat'; </script>")                    
-        })
-    })
-})
-
-app.get("/delete_category/:cid",function(req,res){
-    if (!ensureAdmin(res)) {
-        return;
-    }
-    let catid = parseInt(req.params.cid);
-    category_master_collection.remove({category_id: catid},function(err,result){
-        if(err) throw err;
-        res.send("<script> alert('Category Deleted Successfully'); window.location.href='/admin_manage_cat'; </script>")                            
-    })
-})
-
-app.get("/edit_category/:cid",function(req,res){
-    if (!ensureAdmin(res)) {
-        return;
-    }
-    let catid = parseInt(req.params.cid);
-    category_master_collection.find({category_id: catid}).toArray(function(err,result){
-        if(err) throw err;
-        res.render("admin/admin_update_cat",{layout: "layouts/adminlayouts",catitems: result})
-    })
-})
-
-app.post("/update_cat",function(req,res){
-    if (!ensureAdmin(res)) {
-        return;
-    }
-    const {txtcatid,txtcat} = req.body;
-    category_master_collection.updateOne({category_id: parseInt(txtcatid)},{$set:{category: txtcat}},function(err,result){
-        if(err) throw err;
-        res.send("<script> alert('Category Updated Successfully'); window.location.href='/admin_manage_cat'; </script>")                                
-    })
-})
-
-app.get("/admin_manage_book",function(req,res){
-    if (!ensureAdmin(res)) {
-        return;
-    }
-    category_master_collection.find().toArray(function(err,result){
-        if(err) throw err;
-        book_detail_collection.find().toArray(function(err2,result2){
-            if(err2) throw err2;
-            res.render("admin/admin_manage_book",{layout: "layouts/adminlayouts",catitems:result,bookitems: result2});
-        })
-    })
-});
-
-app.get("/admin_reports", function(req, res) {
-    if (!ensureAdmin(res)) {
-        return;
-    }
-    category_master_collection.find().toArray(function(err, categories) {
-        if (err) throw err;
-
-        book_detail_collection.find().toArray(function(err2, books) {
-            if (err2) throw err2;
-
-            customer_details_collection.find().toArray(function(err3, customers) {
-                if (err3) throw err3;
-                order_detail_collection.find().toArray(function(err4, orders) {
-                    if (err4) throw err4;
-
-                    const booksWithCategory = books.map(function(book) {
-                        const category = categories.find(function(item) {
-                            return item.category_id === book.category_id;
-                        });
-
-                        return {
-                            ...book,
-                            category_name: category ? category.category : "Unknown"
-                        };
-                    });
-
-                    res.render("admin/admin_reports", {
-                        layout: "layouts/adminlayouts",
-                        totalCategories: categories.length,
-                        totalBooks: books.length,
-                        totalCustomers: customers.length,
-                        totalOrders: orders.length,
-                        reportBooks: booksWithCategory,
-                        reportCustomers: customers,
-                        reportOrders: orders
-                    });
-                });
-            });
-        });
-    });
-});
-
-app.get("/admin_orders", function(req, res) {
-    if (!ensureAdmin(res)) {
-        return;
-    }
-
-    order_detail_collection.find().sort({order_id: -1}).toArray(function(err, orders) {
-        if (err) throw err;
-
-        res.render("admin/admin_orders", {
-            layout: "layouts/adminlayouts",
-            orderitems: orders
-        });
-    });
-});
-
-app.get("/admin_bill/:oid", function(req, res) {
-    if (!ensureAdmin(res)) {
-        return;
-    }
-
-    const orderId = parseInt(req.params.oid);
-
-    order_detail_collection.findOne({order_id: orderId}, function(err, order) {
-        if (err) throw err;
-
-        if (!order) {
-            res.send("<script> alert('Order not found'); window.location.href='/admin_orders'; </script>");
-            return;
-        }
-
-        res.render("admin/admin_bill", {
-            layout: "layouts/adminlayouts",
-            orderitem: order
-        });
-    });
-});
-
-
-app.post("/add_book",function(req,res){
-    if (!ensureAdmin(res)) {
-        return;
-    }
-    const {txtname,selcat,txtdesc,txtprice} = req.body;
-    
-    if(!req.files || Object.keys(req.files).length ==0)
-    {
-        res.send("<script> alert('Please Select Book Image'); window.location.href='/admin_manage_book'; </script>")
-    }else{
-        let samplefile = req.files.txtimg;
-        let bookid = 0;
-        let fileName = Date.now()+".jpg";
-        let tmp_path = "/book_img/"+fileName;
-        let upload_path = path.join(uploadDir, fileName);
-        book_detail_collection.find().sort({book_id: -1}).limit(1).toArray(function(err2,result2){
-            if(err2) throw err2;
-            if(result2.length == 0)
-            {
-                bookid=1;
-            }
-            else
-            {
-                var row = JSON.parse(JSON.stringify(result2[0]))
-                bookid = row.book_id + 1
-            }
-            book_detail_collection.insertOne({book_id: bookid,book_name: txtname,category_id: parseInt(selcat),description: txtdesc,book_price: parseInt(txtprice),book_img: tmp_path},function(err3,result3){
-                if(err3) throw err3;
-                samplefile.mv(upload_path,function(err4,result4){
-                    if(err4)
-                    {
-                        res.send("<script> alert('Error In Image Uploading'); window.location.href='/admin_manage_book'; </script>")                    
-                    }
-                    else{
-                        res.send("<script> alert('Book Detail Saved Successfully'); window.location.href='/admin_manage_book'; </script>")                    
-                    }
-                })
-                
-            })
-        })
-    }
-});
-
-
-app.get("/delete_book/:bid",function(req,res){
-    if (!ensureAdmin(res)) {
-        return;
-    }
-    let bookid = parseInt(req.params.bid);
-    book_detail_collection.remove({book_id: bookid},function(err,result){
-        if(err) throw err;
-        res.send("<script> alert('Book Detail Deleted Successfully'); window.location.href='/admin_manage_book'; </script>")                            
-    })
-})
-
-app.get("/edit_book/:bid",function(req,res){
-    if (!ensureAdmin(res)) {
-        return;
-    }
-    let bookid = parseInt(req.params.bid);
-    category_master_collection.find().toArray(function(err,result){
-        if(err) throw err;
-        book_detail_collection.find({book_id: bookid}).toArray(function(err2,result2){
-            if(err2) throw err2;
-            res.render("admin/admin_update_book",{layout: "layouts/adminlayouts",catitems:result,bookitems: result2});
-        })
-    })
-})
-
-
-app.post("/update_book",function(req,res){
-    if (!ensureAdmin(res)) {
-        return;
-    }
-    const {txtbid,txtname,txtdesc,selcat,txtprice} = req.body;
-    
-    if(!req.files || Object.keys(req.files).length ==0)
-    {
-        book_detail_collection.updateOne({book_id: parseInt(txtbid)},{$set: {book_name:txtname,category_id:parseInt(selcat),description:txtdesc,book_price: parseInt(txtprice)}},function(err1,result1){
-            if(err1) throw err1;
-            res.send("<script> alert('Book Detail Updated Successfully'); window.location.href='/admin_manage_book'; </script>")                                                    
-        })
-    }else{
-        let samplefile = req.files.txtimg;
-        
-        let fileName = Date.now()+".jpg";
-        let tmp_path = "/book_img/"+fileName;
-        let upload_path = path.join(uploadDir, fileName);
-        book_detail_collection.updateOne({book_id: parseInt(txtbid)},{$set: {book_name:txtname,category_id:parseInt(selcat),description:txtdesc,book_price: parseInt(txtprice),book_img: tmp_path}},function(err1,result1){
-            if(err1) throw err1;
-            samplefile.mv(upload_path,function(err2,result2){
-                if(err2)                
-                {
-                    res.send("<script> alert('Error In Book Detail Updation'); window.location.href='/admin_manage_book'; </script>")                                                            
-                }else{
-                    res.send("<script> alert('Book Detail Updated Successfully'); window.location.href='/admin_manage_book'; </script>")                                                    
-                }
-            })
-            
-        })
-    }
-})
+module.exports = activeApp || vercelHandler;
+module.exports.createApp = createApp;
+module.exports.parsePositiveId = parsePositiveId;
+module.exports.parsePrice = parsePrice;
+module.exports.getImageInfo = getImageInfo;
+module.exports.initialize = initialize;

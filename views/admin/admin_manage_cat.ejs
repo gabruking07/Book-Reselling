@@ -21,7 +21,7 @@
                                     <td><%= catitems[i].category_id %></td>
                                     <td><%= catitems[i].category %></td>
                                     <td><a href="/edit_category/<%= catitems[i].category_id %>">EDIT</a></td>
-                                    <td><a href="/delete_category/<%= catitems[i].category_id %>">DELETE</a></td>
+                                    <td><form method="post" action="/delete_category/<%= catitems[i].category_id %>"><input type="hidden" name="_csrf" value="<%= csrfToken %>"><button type="submit" class="btn btn-danger btn-sm">DELETE</button></form></td>
                                 </tr>
                         <% } %>
                         </table>
@@ -31,6 +31,7 @@
             </div>
             <div class="col-md-6">
                 <form method="post" action="/add_cat">
+                   <input type="hidden" name="_csrf" value="<%= csrfToken %>">
                    <div class="form-group">
                       <label for="exampleInputEmail1">CATEGORY</label>
                       <input type="text" class="form-control" name="txtcat"  placeholder="Enter Category">

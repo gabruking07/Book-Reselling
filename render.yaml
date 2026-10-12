@@ -11,5 +11,15 @@ services:
         sync: false
       - key: MONGODB_DB_NAME
         value: book_reselling
+      - key: SESSION_SECRET
+        sync: false
+      - key: TRUST_PROXY
+        value: "1"
+      - key: ADMIN_NAME
+        value: Administrator
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
       - key: NODE_VERSION
         value: 20

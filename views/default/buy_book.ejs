@@ -17,7 +17,9 @@
                         <p><strong>Description:</strong> <%= bookitem.description %></p>
                         <p><strong>Price:</strong> Rs. <%= bookitem.book_price %></p>
                         <form method="post" action="/place_order">
+                            <input type="hidden" name="_csrf" value="<%= csrfToken %>">
                             <input type="hidden" name="txtbid" value="<%= bookitem.book_id %>">
+                            <input type="hidden" name="orderToken" value="<%= orderToken %>">
                             <div class="form-group">
                                 <label>Quantity</label>
                                 <input type="number" min="1" value="1" class="form-control" name="txtqty" required>
